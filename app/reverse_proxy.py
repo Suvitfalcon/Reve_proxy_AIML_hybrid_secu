@@ -15,10 +15,16 @@ app = Flask(__name__)
 
 BACKEND_URL = "http://127.0.0.1:5001"
 
-# Maximum number of objects in cache
-CACHE_SIZE = 3
+CACHE_SIZE = 5
+
+
+# =========================================
+# COMPONENTS
+# =========================================
 
 cache_manager = CacheManager(max_size=CACHE_SIZE)
+
+monitor = TrafficMonitor()
 
 
 # =========================================
@@ -28,7 +34,8 @@ cache_manager = CacheManager(max_size=CACHE_SIZE)
 def is_cacheable(response):
 
     cache_control = response.headers.get(
-        "Cache-Control", ""
+        "Cache-Control",
+        ""
     ).lower()
 
     # Private responses must not enter
@@ -36,11 +43,11 @@ def is_cacheable(response):
     if "private" in cache_control:
         return False
 
-    # no-store means don't store it.
+    # no-store responses must not be cached.
     if "no-store" in cache_control:
         return False
 
-    # Only successful responses
+    # Only successful responses are cached.
     if response.status_code != 200:
         return False
 
@@ -54,7 +61,8 @@ def is_cacheable(response):
 def get_ttl(response):
 
     cache_control = response.headers.get(
-        "Cache-Control", ""
+        "Cache-Control",
+        ""
     ).lower()
 
     if "max-age=" in cache_control:
@@ -72,137 +80,18 @@ def get_ttl(response):
         except ValueError:
             pass
 
+    # Default TTL
     return 60
 
 
 # =========================================
-# PROXY
+# MONITORING STATISTICS
 # =========================================
 
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>", methods=["GET", "POST"])
-def proxy(path):
+@app.route("/monitor/stats")
+def monitor_stats():
 
-    # -----------------------------------------
-    # CACHE KEY
-    # -----------------------------------------
-
-    cache_key = request.method + ":" + request.full_path
-
-    cache_key = cache_key.rstrip("?")
-
-
-    # =========================================
-    # CACHE LOOKUP
-    # =========================================
-
-    if request.method == "GET":
-
-        cached_item = cache_manager.get(cache_key)
-
-        if cached_item is not None:
-
-            return Response(
-                cached_item["content"],
-                status=cached_item["status"],
-                headers=cached_item["headers"]
-            )
-
-
-    # =========================================
-    # CACHE MISS
-    # =========================================
-
-    if request.method == "GET":
-
-        print(
-            f"[CACHE MISS] {request.full_path}"
-        )
-
-
-    # =========================================
-    # FORWARD TO BACKEND
-    # =========================================
-
-    backend_url = f"{BACKEND_URL}/{path}"
-
-    try:
-
-        backend_response = requests.request(
-            method=request.method,
-            url=backend_url,
-            params=request.args,
-            data=request.get_data(),
-
-            headers={
-                key: value
-                for key, value in request.headers
-                if key.lower() != "host"
-            },
-
-            timeout=5
-        )
-
-    except requests.RequestException as error:
-
-        return Response(
-            f"Backend connection error: {error}",
-            status=502
-        )
-
-
-    # =========================================
-    # COPY RESPONSE HEADERS
-    # =========================================
-
-    response_headers = {}
-
-    for key, value in backend_response.headers.items():
-
-        if key.lower() not in [
-            "content-encoding",
-            "transfer-encoding",
-            "connection"
-        ]:
-
-            response_headers[key] = value
-
-
-    # =========================================
-    # CACHE SECURITY CHECK
-    # =========================================
-
-    if (
-        request.method == "GET"
-        and is_cacheable(backend_response)
-    ):
-
-        ttl = get_ttl(backend_response)
-
-        cache_manager.put(
-            key=cache_key,
-            content=backend_response.content,
-            status=backend_response.status_code,
-            headers=response_headers,
-            ttl=ttl
-        )
-
-    else:
-
-        print(
-            f"[CACHE BYPASS] {request.full_path}"
-        )
-
-
-    # =========================================
-    # RETURN TO CLIENT
-    # =========================================
-
-    return Response(
-        backend_response.content,
-        status=backend_response.status_code,
-        headers=response_headers
-    )
+    return monitor.get_features()
 
 
 # =========================================
@@ -230,13 +119,253 @@ def clear_cache():
 
 
 # =========================================
+# REVERSE PROXY
+# =========================================
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>", methods=["GET", "POST"])
+def proxy(path):
+
+    start_time = time.time()
+
+    # =====================================
+    # CACHE KEY
+    # =====================================
+
+    cache_key = (
+        request.method
+        + ":"
+        + request.full_path
+    )
+
+    cache_key = cache_key.rstrip("?")
+
+    # =====================================
+    # CACHE LOOKUP
+    # =====================================
+
+    if request.method == "GET":
+
+        cached_item = cache_manager.get(
+            cache_key
+        )
+
+        if cached_item is not None:
+
+            response_time = (
+                time.time() - start_time
+            ) * 1000
+
+            print(
+                f"[CACHE HIT] "
+                f"{request.full_path}"
+            )
+
+            # Record monitoring data
+            monitor.record_request(
+
+                client_ip=request.remote_addr,
+
+                url=request.path,
+
+                method=request.method,
+
+                response_status=
+                    cached_item["status"],
+
+                response_size=
+                    len(cached_item["content"]),
+
+                response_time=response_time,
+
+                cache_status="HIT"
+            )
+
+            return Response(
+
+                cached_item["content"],
+
+                status=cached_item["status"],
+
+                headers=cached_item["headers"]
+            )
+
+    # =====================================
+    # CACHE MISS
+    # =====================================
+
+    if request.method == "GET":
+
+        print(
+            f"[CACHE MISS] "
+            f"{request.full_path}"
+        )
+
+    # =====================================
+    # FORWARD REQUEST TO BACKEND
+    # =====================================
+
+    backend_url = (
+        f"{BACKEND_URL}/{path}"
+    )
+
+    try:
+
+        backend_response = requests.request(
+
+            method=request.method,
+
+            url=backend_url,
+
+            params=request.args,
+
+            data=request.get_data(),
+
+            headers={
+                key: value
+                for key, value
+                in request.headers
+                if key.lower() != "host"
+            },
+
+            timeout=5
+        )
+
+    except requests.RequestException as error:
+
+        return Response(
+
+            f"Backend connection error: {error}",
+
+            status=502
+        )
+
+    # =====================================
+    # RESPONSE HEADERS
+    # =====================================
+
+    response_headers = {}
+
+    for key, value in backend_response.headers.items():
+
+        if key.lower() not in [
+
+            "content-encoding",
+
+            "transfer-encoding",
+
+            "connection"
+        ]:
+
+            response_headers[key] = value
+
+    # =====================================
+    # CACHE SECURITY CHECK
+    # =====================================
+
+    if (
+
+        request.method == "GET"
+
+        and is_cacheable(
+            backend_response
+        )
+    ):
+
+        ttl = get_ttl(
+            backend_response
+        )
+
+        cache_manager.put(
+
+            key=cache_key,
+
+            content=backend_response.content,
+
+            status=backend_response.status_code,
+
+            headers=response_headers,
+
+            ttl=ttl
+        )
+
+        print(
+            f"[CACHE STORE] "
+            f"{request.full_path} "
+            f"TTL={ttl}s"
+        )
+
+    else:
+
+        print(
+            f"[CACHE BYPASS] "
+            f"{request.full_path}"
+        )
+
+    # =====================================
+    # MONITORING
+    # =====================================
+
+    response_time = (
+        time.time() - start_time
+    ) * 1000
+
+    monitor.record_request(
+
+        client_ip=request.remote_addr,
+
+        url=request.path,
+
+        method=request.method,
+
+        response_status=
+            backend_response.status_code,
+
+        response_size=
+            len(backend_response.content),
+
+        response_time=response_time,
+
+        cache_status="MISS"
+    )
+
+    # =====================================
+    # RETURN RESPONSE TO CLIENT
+    # =====================================
+
+    return Response(
+
+        backend_response.content,
+
+        status=backend_response.status_code,
+
+        headers=response_headers
+    )
+
+
+# =========================================
 # START PROXY
 # =========================================
 
 if __name__ == "__main__":
 
     print(
-        "Reverse Proxy running on "
+        "================================="
+    )
+
+    print(
+        " Secure Smart Cache Proxy"
+    )
+
+    print(
+        "================================="
+    )
+
+    print(
+        "Proxy running on:"
+    )
+
+    print(
         "http://localhost:5000"
     )
 
@@ -250,8 +379,23 @@ if __name__ == "__main__":
         CACHE_SIZE
     )
 
+    print(
+        "Monitoring:"
+    )
+
+    print(
+        "http://localhost:5000/monitor/stats"
+    )
+
+    print(
+        "================================="
+    )
+
     app.run(
+
         host="127.0.0.1",
+
         port=5000,
+
         debug=True
     )

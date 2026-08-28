@@ -89,6 +89,39 @@ def offers():
     return response
 
 
+@app.route("/suvit")
+def offers():
+
+    response = make_response(jsonify({
+        "offers": [
+            "hero",
+            "tall guy",
+            "spider man"
+        ],
+        "generated_at": time.time()
+    }))
+
+    response.headers["Cache-Control"] = "public, max-age=30"
+
+    return response
+
+@app.route("/vidya")
+def offers():
+
+    response = make_response(jsonify({
+        "offers": [
+            "beautiful",
+            "cute",
+            "cry  baby"
+        ],
+        "generated_at": time.time()
+    }))
+
+    response.headers["Cache-Control"] = "public, max-age=50"
+
+    return response
+
+
 if __name__ == "__main__":
     print("Backend server running on http://localhost:5001")
 

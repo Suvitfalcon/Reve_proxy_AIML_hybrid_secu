@@ -90,10 +90,10 @@ def offers():
 
 
 @app.route("/suvit")
-def offers():
+def suvit():
 
     response = make_response(jsonify({
-        "offers": [
+        "Suvit": [
             "hero",
             "tall guy",
             "spider man"
@@ -106,10 +106,10 @@ def offers():
     return response
 
 @app.route("/vidya")
-def offers():
+def vidya():
 
     response = make_response(jsonify({
-        "offers": [
+        "Vidya": [
             "beautiful",
             "cute",
             "cry  baby"

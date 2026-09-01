@@ -14,18 +14,17 @@ BACKEND_URL = "http://127.0.0.1:5001"
 CACHE_SIZE = 5
 
 
-# =========================================
+
 # COMPONENTS
-# =========================================
+
 
 cache_manager = CacheManager(max_size=CACHE_SIZE)
 
 monitor = TrafficMonitor()
 
 
-# =========================================
 # CACHE SAFETY
-# =========================================
+
 
 def is_cacheable(response):
 
@@ -34,25 +33,22 @@ def is_cacheable(response):
         ""
     ).lower()
 
-    # Private responses must not enter
-    # a shared cache.
     if "private" in cache_control:
         return False
 
-    # no-store responses must not be cached.
     if "no-store" in cache_control:
         return False
 
-    # Only successful responses are cached.
+
     if response.status_code != 200:
         return False
 
     return True
 
 
-# =========================================
+
 # TTL EXTRACTION
-# =========================================
+
 
 def get_ttl(response):
 
@@ -80,9 +76,8 @@ def get_ttl(response):
     return 60
 
 
-# =========================================
 # MONITORING STATISTICS
-# =========================================
+
 
 @app.route("/monitor/stats")
 def monitor_stats():

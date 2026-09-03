@@ -13,7 +13,7 @@ BACKEND_URL = "http://127.0.0.1:5001"
 
 CACHE_SIZE = 5
 
-# 1)
+# 1
 
 # COMPONENTS
 
